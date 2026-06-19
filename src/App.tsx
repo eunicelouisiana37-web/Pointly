@@ -21,7 +21,7 @@ import { VideoLibrary } from './components/VideoLibrary';
 import { VideoPlayerModal } from './components/VideoPlayerModal';
 import { PostRecordingModal } from './components/PostRecordingModal';
 import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
-import { AlertCircle, HelpCircle as HelpIcon, Info, Laptop, Keyboard } from 'lucide-react';
+import { AlertCircle, HelpCircle as HelpIcon, Info, Laptop, Keyboard, Sun, Moon } from 'lucide-react';
 import { getAllRecordings, saveRecording, deleteRecording, updateRecordingName, initDB, DBRecording } from './lib/db';
 import { 
   Video, 
@@ -62,6 +62,21 @@ export default function App() {
   const [selectedFps, setSelectedFps] = useState<30 | 60>(60);
   const [systemAudioActive, setSystemAudioActive] = useState(false);
   const [countdownDuration, setCountdownDuration] = useState<0 | 3 | 5 | 10>(3);
+  const [noiseCancellationActive, setNoiseCancellationActive] = useState(true);
+
+  // Application Visual Theme
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    const stored = localStorage.getItem('pointly-theme');
+    return (stored === 'light' || stored === 'dark') ? stored : 'dark';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('pointly-theme', theme);
+  }, [theme]);
+
+  // IndexedDB Storage Quotas & Live Monitoring
+  const [storageUsage, setStorageUsage] = useState<number>(0);
+  const [storageQuota, setStorageQuota] = useState<number>(1024 * 1024 * 1024 * 2); // Fallback to 2 GB until estimated
 
   // Canvas Settings (Easel)
   const [currentTool, setCurrentTool] = useState<AnnotationTool>('brush');
@@ -154,6 +169,8 @@ export default function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const rawAudioStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   // --- INITIALIZATION & RECOVERY ---
   useEffect(() => {
@@ -173,6 +190,23 @@ export default function App() {
     };
   }, []);
 
+  const updateStorageEstimate = async () => {
+    if (navigator.storage && navigator.storage.estimate) {
+      try {
+        const estimate = await navigator.storage.estimate();
+        setStorageUsage(estimate.usage ?? 0);
+        setStorageQuota(estimate.quota ?? (1024 * 1024 * 1024 * 2));
+      } catch (err) {
+        console.warn('Could not read navigator storage estimates:', err);
+      }
+    }
+  };
+
+  // Keep storage estimates synchronized with any database state change
+  useEffect(() => {
+    updateStorageEstimate();
+  }, [recordings]);
+
   const refreshRecordingsList = async () => {
     try {
       const recs = await getAllRecordings();
@@ -191,25 +225,103 @@ export default function App() {
       audioStream.getTracks().forEach((t) => t.stop());
       setAudioStream(null);
     }
+    if (rawAudioStreamRef.current) {
+      rawAudioStreamRef.current.getTracks().forEach((t) => t.stop());
+      rawAudioStreamRef.current = null;
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
   };
 
-  // --- MICROPHONE ACQUISITION ---
-  const activateMicrophone = async (deviceId?: string) => {
-    if (audioStream) {
-      audioStream.getTracks().forEach((t) => t.stop());
+  const applyNoiseCancellation = (rawStream: MediaStream, forceNoiseCancellation?: boolean): MediaStream => {
+    const isEnabled = forceNoiseCancellation !== undefined ? forceNoiseCancellation : noiseCancellationActive;
+    if (!isEnabled) {
+      return rawStream;
     }
 
     try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return rawStream;
+
+      const ctx = new AudioCtx();
+      audioCtxRef.current = ctx;
+
+      const source = ctx.createMediaStreamSource(rawStream);
+
+      // Stage 1: Highpass filter (cuts low frequencies like fan hums, background air vibration below 85Hz)
+      const hpFilter = ctx.createBiquadFilter();
+      hpFilter.type = 'highpass';
+      hpFilter.frequency.setValueAtTime(85, ctx.currentTime);
+
+      // Stage 2: Notch filter at 60Hz and 50Hz (cancels power line electricity hum)
+      const notch50 = ctx.createBiquadFilter();
+      notch50.type = 'notch';
+      notch50.frequency.setValueAtTime(50, ctx.currentTime);
+      notch50.Q.setValueAtTime(12, ctx.currentTime);
+
+      const notch60 = ctx.createBiquadFilter();
+      notch60.type = 'notch';
+      notch60.frequency.setValueAtTime(60, ctx.currentTime);
+      notch60.Q.setValueAtTime(12, ctx.currentTime);
+
+      // Stage 3: Dynamic Noise Gate compressor
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-38, ctx.currentTime); // quiet background noise gets heavily attenuated
+      compressor.knee.setValueAtTime(10, ctx.currentTime);
+      compressor.ratio.setValueAtTime(15, ctx.currentTime);
+      compressor.attack.setValueAtTime(0.002, ctx.currentTime);
+      compressor.release.setValueAtTime(0.20, ctx.currentTime);
+
+      // Chain connections: Source -> HPF -> Notch 50 -> Notch 60 -> Compressor -> Destination
+      source.connect(hpFilter);
+      hpFilter.connect(notch50);
+      notch50.connect(notch60);
+      notch60.connect(compressor);
+
+      const dest = ctx.createMediaStreamDestination();
+      compressor.connect(dest);
+
+      return dest.stream;
+    } catch (e) {
+      console.warn('Web Audio Studio Noise Gate could not be initialized:', e);
+      return rawStream;
+    }
+  };
+
+  // --- MICROPHONE ACQUISITION ---
+  const activateMicrophone = async (deviceId?: string, forceNoiseCancellation?: boolean) => {
+    deactivateMicrophone();
+
+    try {
+      // Hardware-level DSP constraints
+      const useNoiseCancel = forceNoiseCancellation !== undefined ? forceNoiseCancellation : noiseCancellationActive;
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: useNoiseCancel,
+        noiseSuppression: useNoiseCancel,
+        autoGainControl: useNoiseCancel,
+      };
+      if (deviceId) {
+        audioConstraints.deviceId = { exact: deviceId };
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+        audio: audioConstraints,
         video: false,
       });
-      setAudioStream(stream);
+
+      rawAudioStreamRef.current = stream;
+
+      // Software active noise cancelling and static filter
+      const finalStream = applyNoiseCancellation(stream, useNoiseCancel);
+
+      setAudioStream(finalStream);
       setMicrophoneActive(true);
       if (stream.getTracks()[0] && !deviceId) {
         setSelectedMicId(stream.getTracks()[0].getSettings().deviceId || '');
       }
-      return stream;
+      return finalStream;
     } catch (err) {
       console.warn('Microphone permission or link failed:', err);
       setMicrophoneActive(false);
@@ -222,6 +334,14 @@ export default function App() {
     if (audioStream) {
       audioStream.getTracks().forEach((t) => t.stop());
       setAudioStream(null);
+    }
+    if (rawAudioStreamRef.current) {
+      rawAudioStreamRef.current.getTracks().forEach((t) => t.stop());
+      rawAudioStreamRef.current = null;
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
     }
     setMicrophoneActive(false);
   };
@@ -280,6 +400,13 @@ export default function App() {
     setSelectedMicId(id);
     if (microphoneActive) {
       await activateMicrophone(id);
+    }
+  };
+
+  const handleNoiseCancellationToggle = async (active: boolean) => {
+    setNoiseCancellationActive(active);
+    if (microphoneActive) {
+      await activateMicrophone(selectedMicId, active);
     }
   };
 
@@ -567,8 +694,17 @@ export default function App() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  const formatBytes = (bytes: number, decimals = 1): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+  };
+
   return (
-    <div className="min-h-screen bg-[#15161A] text-[#F4F1EA] noise-bg relative flex flex-col pb-16" id="pointly-main-studio">
+    <div className={`min-h-screen relative flex flex-col pb-16 transition-colors duration-150 ${theme === 'light' ? 'light-theme bg-[#FAFBFD]' : 'bg-[#15161A]'} text-[#F4F1EA] noise-bg`} id="pointly-main-studio">
       
       {/* 1. TOP NAV HEADER */}
       <header className="h-20 border-b border-[#8A8780]/20 bg-[#15161A]/90 backdrop-blur-md sticky top-0 z-40 px-6 sm:px-10 flex items-center justify-between" id="app-header">
@@ -607,6 +743,28 @@ export default function App() {
             </button>
           )}
           <div className="h-6 w-px bg-[#8A8780]/30 hidden md:block"></div>
+          
+          {/* Visual Theme Toggle */}
+          <button
+            onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1C1E24] border border-white/10 hover:border-[#FF7A33]/40 hover:bg-zinc-800 transition cursor-pointer text-xs font-semibold text-zinc-300"
+            title={theme === 'dark' ? 'Switch to Clean Light Theme' : 'Switch to Sophisticated Dark Theme'}
+            id="theme-toggle-button"
+          >
+            {theme === 'dark' ? (
+              <>
+                <Sun size={13} className="text-[#FF7A33]" />
+                <span className="hidden sm:inline">Light Mode</span>
+              </>
+            ) : (
+              <>
+                <Moon size={13} className="text-[#FF7A33]" />
+                <span className="hidden sm:inline">Dark Mode</span>
+              </>
+            )}
+          </button>
+
+          <div className="h-6 w-px bg-[#8A8780]/30 hidden md:block"></div>
           <button
             onClick={() => setIsShortcutsHelpOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1C1E24] border border-white/10 hover:border-[#FF7A33]/40 hover:bg-zinc-800 transition cursor-pointer text-xs font-semibold text-zinc-300"
@@ -622,10 +780,26 @@ export default function App() {
             <div className="w-1.5 h-1.5 bg-[#4ADE80] rounded-full"></div>
             <span className="text-[#4ADE80] text-xs font-medium">Privacy Shield Active</span>
           </div>
-          <div className="h-6 w-px bg-[#8A8780]/30 hidden md:block"></div>
-          <div className="hidden md:flex flex-col items-end">
-            <span className="text-[10px] uppercase tracking-widest text-[#8A8780] font-mono">Local Storage</span>
-            <span className="text-xs font-mono text-[#F4F1EA]">{(recordings.reduce((sum, r) => sum + (r.videoBlob?.size || 0), 0) / (1024 * 1024)).toFixed(1)} MB Used</span>
+          <div className="h-6 w-px bg-[#8A8780]/30 hidden lg:block"></div>
+          <div className="hidden lg:flex flex-col items-start w-52" id="indexeddb-storage-monitor">
+            <div className="flex items-center justify-between w-full text-[10px] font-mono tracking-wider text-[#8A8780] font-bold uppercase">
+              <span className="flex items-center gap-1">
+                <HardDrive size={11} className="text-[#FF7A33]" />
+                Sandbox Storage
+              </span>
+              <span>{((storageUsage / storageQuota) * 100).toFixed(2)}%</span>
+            </div>
+            {/* Premium miniature visual progress bar */}
+            <div className="w-full h-1.5 bg-[#23252C] rounded-full overflow-hidden mt-1 border border-white/5 relative" title={`Exact browser-allocated sandbox space: ${formatBytes(storageUsage)} used of ${formatBytes(storageQuota)}`}>
+              <div 
+                className="h-full bg-gradient-to-r from-[#FF7A33] to-[#ff985f] rounded-full transition-all duration-300"
+                style={{ width: `${Math.min(100, Math.max(1, (storageUsage / storageQuota) * 100))}%` }}
+              ></div>
+            </div>
+            <div className="flex justify-between w-full text-[9px] font-mono text-zinc-400 mt-0.5">
+              <span>{formatBytes(storageUsage)} used</span>
+              <span>limit {formatBytes(storageQuota)}</span>
+            </div>
           </div>
         </div>
       </header>
@@ -1099,6 +1273,8 @@ export default function App() {
             videoFilter={videoFilter}
             onVideoFilterChange={setVideoFilter}
             audioStream={audioStream}
+            noiseCancellationActive={noiseCancellationActive}
+            onNoiseCancellationToggle={handleNoiseCancellationToggle}
             webcamFrameStyle={webcamFrameStyle}
             onWebcamFrameStyleChange={setWebcamFrameStyle}
             webcamBgEffect={webcamBgEffect}

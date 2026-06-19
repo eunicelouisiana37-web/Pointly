@@ -62,3 +62,153 @@ input[type="range"] {
 .noise-bg {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.015'/%3E%3C/svg%3E");
 }
+
+/* ==========================================================================
+   POINTLY CLEAN LIGHT THEME RULES (MAINTAINING AMBER CONSISTENCY)
+   ========================================================================== */
+
+/* Define CSS Variables for light theme */
+.light-theme {
+  --color-brand-bg: #FAFBFD;
+  --color-brand-card: #FFFFFF;
+  --color-brand-text: #17171C;
+  --color-brand-muted: #5F6068;
+}
+
+/* Background Color Overrides */
+.light-theme,
+.light-theme body,
+.light-theme #pointly-main-studio,
+.light-theme #pointly-landing-page,
+.light-theme .bg-\[\#15161A\] {
+  background-color: var(--color-brand-bg) !important;
+  color: var(--color-brand-text) !important;
+}
+
+.light-theme .bg-\[\#15161A\]\/90 {
+  background-color: rgba(250, 251, 253, 0.9) !important;
+}
+
+.light-theme .bg-\[\#1C1E24\],
+.light-theme .bg-\[\#1e1f24\],
+.light-theme .bg-\[\#1e1f24\]\/30,
+.light-theme .bg-\[\#1e1f24\]\/20,
+.light-theme #recorder-dashboard {
+  background-color: var(--color-brand-card) !important;
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03) !important;
+}
+
+.light-theme #stats-dashboard-row {
+  background-color: #F1F3F5 !important;
+}
+
+.light-theme .bg-\[\#0F1012\],
+.light-theme .bg-\[\#090A0C\],
+.light-theme #landing-footer {
+  background-color: #F1F3F6 !important;
+}
+
+.light-theme .bg-\[\#1C1D24\] {
+  background-color: #F3F4F6 !important;
+}
+
+/* Drawing tool & Dock background styles */
+.light-theme #drawing-tools-dock,
+.light-theme #annotation-group,
+.light-theme #color-palette {
+  background-color: #F3F4F6 !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.04) !important;
+}
+
+.light-theme #brush-weight-box {
+  background-color: #FFFFFF !important;
+}
+
+/* Modal Countdown overlays & Background overlays */
+.light-theme #countdown-modal-layer {
+  background-color: rgba(250, 251, 253, 0.96) !important;
+}
+
+/* text color overrides */
+.light-theme .text-\[\#F4F1EA\] {
+  color: var(--color-brand-text) !important;
+}
+
+.light-theme .text-zinc-100,
+.light-theme .text-zinc-200,
+.light-theme .text-zinc-300 {
+  color: #1F2937 !important;
+}
+
+.light-theme .text-zinc-400,
+.light-theme .text-zinc-500,
+.light-theme .text-\[\#8A8780\],
+.light-theme .text-zinc-500\/80 {
+  color: var(--color-brand-muted) !important;
+}
+
+.light-theme .hover\:text-\[\#F4F1EA\]:hover {
+  color: #000000 !important;
+}
+
+/* borders styling */
+.light-theme .border-white\/5,
+.light-theme .border-white\/10,
+.light-theme .border-\[\#23252C\],
+.light-theme .border-\[\#2B2D38\],
+.light-theme .border-\[\#8A8780\]\/15,
+.light-theme .border-\[\#8A8780\]\/20,
+.light-theme .border-\[\#8A8780\]\/30 {
+  border-color: #E5E7EB !important;
+}
+
+/* Custom adjustment for input fields and selectors */
+.light-theme select,
+.light-theme input,
+.light-theme textarea {
+  background-color: #FAFBFD !important;
+  color: #111827 !important;
+  border-color: #D1D5DB !important;
+}
+
+.light-theme select:focus,
+.light-theme input:focus,
+.light-theme textarea:focus {
+  border-color: #FF7A33 !important;
+}
+
+/* Theme-specific button configurations */
+.light-theme #header-kb-help-btn,
+.light-theme #theme-toggle-button {
+  background-color: #FFFFFF !important;
+  color: #374151 !important;
+  border-color: #E5E7EB !important;
+}
+
+.light-theme #theme-toggle-button:hover,
+.light-theme #header-kb-help-btn:hover {
+  background-color: #F3F4F6 !important;
+  border-color: #FF7A33 !important;
+}
+
+.light-theme #btn-toggle-noise-cancel {
+  background-color: #E5E7EB !important;
+  color: #4B5563 !important;
+}
+.light-theme #btn-toggle-noise-cancel.bg-\[\#4ADE80\]\/15 {
+  background-color: rgba(74, 222, 128, 0.2) !important;
+  color: #166534 !important;
+}
+
+.light-theme .noise-bg {
+  /* Dynamic subtle noise opacity */
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.007'/%3E%3C/svg%3E") !important;
+}
+
+/* Scrollbars for light mode */
+.light-theme ::-webkit-scrollbar-track {
+  background: #FAFBFD !important;
+}
+.light-theme ::-webkit-scrollbar-thumb {
+  background: #E5E7EB !important;
+}

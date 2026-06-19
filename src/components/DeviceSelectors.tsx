@@ -24,6 +24,8 @@ interface DeviceSelectorsProps {
   onVideoFilterChange: (filter: VideoFilter) => void;
   
   audioStream: MediaStream | null;
+  noiseCancellationActive: boolean;
+  onNoiseCancellationToggle: (active: boolean) => void;
 
   // Phase 4 Webcam effects props
   webcamFrameStyle: WebcamFrameStyle;
@@ -59,6 +61,8 @@ export const DeviceSelectors: React.FC<DeviceSelectorsProps> = ({
   videoFilter,
   onVideoFilterChange,
   audioStream,
+  noiseCancellationActive,
+  onNoiseCancellationToggle,
 
   // New Phase 4 properties destructured
   webcamFrameStyle,
@@ -167,6 +171,42 @@ export const DeviceSelectors: React.FC<DeviceSelectorsProps> = ({
             )}
           </select>
           <AudioLevelMeter stream={audioStream} active={microphoneActive} />
+
+          {/* Studio Noise Canceller controls */}
+          <div className="bg-[#1C1D24] border border-[#2B2D38] rounded-xl p-3 mt-2 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-zinc-300 flex items-center gap-1.5 font-sans">
+                  <span className={`h-2 w-2 rounded-full ${noiseCancellationActive ? 'bg-[#4ADE80] animate-pulse' : 'bg-zinc-600'}`}></span>
+                  Studio Noise Canceller
+                </span>
+                <span className="text-[10px] text-zinc-500 font-medium">
+                  Filters system &amp; external fan/static noise
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNoiseCancellationToggle(!noiseCancellationActive)}
+                className={`text-[10px] px-2.5 py-1 font-bold rounded-lg transition duration-150 ${
+                  noiseCancellationActive
+                    ? 'bg-[#4ADE80]/15 text-[#4ADE80] border border-[#4ADE80]/40 hover:bg-[#4ADE80]/25'
+                    : 'bg-zinc-800 text-zinc-500 border border-transparent hover:bg-zinc-700 hover:text-zinc-400'
+                }`}
+                id="btn-toggle-noise-cancel"
+              >
+                {noiseCancellationActive ? 'ACTIVE' : 'MUTED'}
+              </button>
+            </div>
+            {noiseCancellationActive && (
+              <div className="text-[10px] text-zinc-400 bg-[#15161A] border border-[#23252C] rounded-lg p-2 leading-relaxed">
+                <div className="font-semibold text-[#4ADE80] mb-1 flex items-center gap-1">
+                  <ShieldCheck size={11} /> Multi-Stage Isolation Active:
+                </div>
+                1. <strong>DSP Stack:</strong> Echo cancellation &amp; AGC hardware level filters. <br />
+                2. <strong>Gate Engine:</strong> Pre-filtered 85Hz High-Pass + AC Notch to eliminate constant fans, static noise, and mic hums.
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Cámara Hardware Selector */}
