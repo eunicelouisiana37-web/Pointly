@@ -1152,6 +1152,9 @@ export default function App() {
             <p className="text-[10px] font-mono tracking-tight text-zinc-500 uppercase leading-normal">
               Pointly client engine • Built for custom presentation guides and walkthroughs • 100% sandboxed
             </p>
+            <p className="text-xs text-zinc-400 mt-2 font-sans">
+              Pointly Built by Emmanuel Eleweke
+            </p>
           </footer>
         </>
       )}
