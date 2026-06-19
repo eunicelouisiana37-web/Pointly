@@ -1,0 +1,11 @@
+{
+  "name": "Pointly",
+  "description": "Privacy-first, browser-based screen recorder with webcam overlays, spotlight effects, and live annotation tools.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
