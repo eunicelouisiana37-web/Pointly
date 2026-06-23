@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Mic, MicOff, Camera, CameraOff, Sparkles, LayoutGrid, Image as ImageIcon, Circle, Sun, HelpCircle, Eye, RefreshCw, Layers, ShieldCheck } from 'lucide-react';
+import { Mic, MicOff, Camera, CameraOff, Sparkles, LayoutGrid, Image as ImageIcon, Circle, Sun, HelpCircle, Eye, RefreshCw, Layers, ShieldCheck, SlidersHorizontal, Headphones } from 'lucide-react';
 import { CanvasBackground, WebcamFrame, VideoFilter, WebcamFrameStyle, WebcamBgEffect, WebcamReplaceType, WebcamPerformanceMode } from '../types';
 import { AudioLevelMeter } from './AudioLevelMeter';
 
@@ -26,6 +26,12 @@ interface DeviceSelectorsProps {
   audioStream: MediaStream | null;
   noiseCancellationActive: boolean;
   onNoiseCancellationToggle: (active: boolean) => void;
+  noiseGateThreshold: number;
+  onThresholdChange: (val: number) => void;
+  noiseLowPassActive: boolean;
+  onLowPassToggle: (active: boolean) => void;
+  audioMonitorActive: boolean;
+  onAudioMonitorToggle: (active: boolean) => void;
 
   // Phase 4 Webcam effects props
   webcamFrameStyle: WebcamFrameStyle;
@@ -63,6 +69,12 @@ export const DeviceSelectors: React.FC<DeviceSelectorsProps> = ({
   audioStream,
   noiseCancellationActive,
   onNoiseCancellationToggle,
+  noiseGateThreshold,
+  onThresholdChange,
+  noiseLowPassActive,
+  onLowPassToggle,
+  audioMonitorActive,
+  onAudioMonitorToggle,
 
   // New Phase 4 properties destructured
   webcamFrameStyle,
@@ -173,7 +185,7 @@ export const DeviceSelectors: React.FC<DeviceSelectorsProps> = ({
           <AudioLevelMeter stream={audioStream} active={microphoneActive} />
 
           {/* Studio Noise Canceller controls */}
-          <div className="bg-[#1C1D24] border border-[#2B2D38] rounded-xl p-3 mt-2 space-y-2">
+          <div className="bg-[#1C1D24] border border-[#2B2D38] rounded-xl p-3 mt-2 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex flex-col">
                 <span className="text-xs font-bold text-zinc-300 flex items-center gap-1.5 font-sans">
@@ -197,13 +209,93 @@ export const DeviceSelectors: React.FC<DeviceSelectorsProps> = ({
                 {noiseCancellationActive ? 'ACTIVE' : 'MUTED'}
               </button>
             </div>
+
             {noiseCancellationActive && (
-              <div className="text-[10px] text-zinc-400 bg-[#15161A] border border-[#23252C] rounded-lg p-2 leading-relaxed">
-                <div className="font-semibold text-[#4ADE80] mb-1 flex items-center gap-1">
-                  <ShieldCheck size={11} /> Multi-Stage Isolation Active:
+              <div className="space-y-3 pt-1 border-t border-[#23252C]">
+                {/* Manual Threshold Sliders */}
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center text-[10px] font-mono">
+                    <span className="text-zinc-400 flex items-center gap-1 text-[10.5px]">
+                      <SlidersHorizontal size={11} className="text-[#FF7A33]" />
+                      Gate Threshold
+                    </span>
+                    <span className="text-[#FF7A33] font-semibold">{noiseGateThreshold} dB</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-60"
+                    max="-20"
+                    step="1"
+                    value={noiseGateThreshold}
+                    onChange={(e) => onThresholdChange(parseFloat(e.target.value))}
+                    className="w-full h-1 bg-[#15161A] rounded-lg appearance-none cursor-pointer accent-[#FF7A33]"
+                    title="Lower thresholds allow subtle speech but let background hums leak. Higher thresholds block loud system/laptop fan whines."
+                  />
+                  <div className="text-[9px] text-zinc-500 leading-relaxed font-sans">
+                    {noiseGateThreshold < -48 ? (
+                      <span>Sensitive mode: Good for silent rooms. Quiet fan noise may leak.</span>
+                    ) : noiseGateThreshold > -35 ? (
+                      <span>Aggressive mode: Forces silence over heavy fan blares & static buzzes.</span>
+                    ) : (
+                      <span>Optimized mode: Perfectly isolates continuous laptop whine & room reflection.</span>
+                    )}
+                  </div>
                 </div>
-                1. <strong>DSP Stack:</strong> Echo cancellation &amp; AGC hardware level filters. <br />
-                2. <strong>Gate Engine:</strong> Pre-filtered 85Hz High-Pass + AC Notch to eliminate constant fans, static noise, and mic hums.
+
+                {/* Sub Options (Fan Lowpass Filter & Headphones Feedback Loopback) */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  {/* Option 1: High Frequency Lowpass Whine Filter */}
+                  <button
+                    type="button"
+                    onClick={() => onLowPassToggle(!noiseLowPassActive)}
+                    className={`flex flex-col items-start p-2 rounded-lg border text-left transition duration-150 ${
+                      noiseLowPassActive
+                        ? 'bg-[#FF7A33]/5 border-[#FF7A33]/30 text-zinc-300'
+                        : 'bg-[#15161A] border-[#23252C] text-zinc-500 hover:text-zinc-400'
+                    }`}
+                  >
+                    <span className="text-[10px] font-bold flex items-center gap-1">
+                      <span className={`h-1.5 w-1.5 rounded-full ${noiseLowPassActive ? 'bg-[#FF7A33]' : 'bg-transparent border border-zinc-600'}`}></span>
+                      Anti-Hiss (8.5kHz)
+                    </span>
+                    <span className="text-[8.5px] mt-0.5 leading-snug">
+                      {noiseLowPassActive ? 'Eliminating high laptop fan screech' : 'Full speaker range (bypass)'}
+                    </span>
+                  </button>
+
+                  {/* Option 2: Live Headphone Loopback Monitor */}
+                  <button
+                    type="button"
+                    onClick={() => onAudioMonitorToggle(!audioMonitorActive)}
+                    className={`flex flex-col items-start p-2 rounded-lg border text-left transition duration-150 ${
+                      audioMonitorActive
+                        ? 'bg-[#4ADE80]/5 border-[#4ADE80]/30 text-[#4ADE80]'
+                        : 'bg-[#15161A] border-[#23252C] text-zinc-500 hover:text-zinc-400'
+                    }`}
+                  >
+                    <span className="text-[10px] font-bold flex items-center gap-1">
+                      <Headphones size={11} className={audioMonitorActive ? 'text-[#4ADE80]' : 'text-zinc-500'} />
+                      Feedback Monitor
+                    </span>
+                    <span className="text-[8.5px] mt-0.5 leading-snug">
+                      {audioMonitorActive ? 'Routing isolated audio' : 'Click to hear filtered speech'}
+                    </span>
+                  </button>
+                </div>
+
+                {audioMonitorActive && (
+                  <div className="text-[9px] text-[#4ADE80] bg-[#4ADE80]/5 border border-[#4ADE80]/20 rounded-lg p-2 leading-relaxed flex items-start gap-1 font-sans">
+                    <span className="font-bold">⚠️ Notice:</span>
+                    <span>Use headphones or turn down speaker volume to prevent severe feedback loops. Loopback captures you real-time.</span>
+                  </div>
+                )}
+
+                <div className="text-[10px] text-zinc-400 bg-[#15161A] border border-[#23252C] rounded-lg p-2 leading-relaxed">
+                  <div className="font-semibold text-[#4ADE80] mb-1 flex items-center gap-1">
+                    <ShieldCheck size={11} /> Advanced Software Shield Active:
+                  </div>
+                  Adaptive 85Hz cut, power electrical grounding notch, dynamic gate compression, and custom spectral anti-whine isolators running in browser memory.
+                </div>
               </div>
             )}
           </div>

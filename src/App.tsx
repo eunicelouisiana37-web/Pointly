@@ -64,6 +64,17 @@ export default function App() {
   const [countdownDuration, setCountdownDuration] = useState<0 | 3 | 5 | 10>(3);
   const [noiseCancellationActive, setNoiseCancellationActive] = useState(true);
 
+  // Advanced Noise Isolation States
+  const [noiseGateThreshold, setNoiseGateThreshold] = useState<number>(() => {
+    const stored = localStorage.getItem('pointly-noise-gate-threshold');
+    return stored ? parseFloat(stored) : -42;
+  });
+  const [noiseLowPassActive, setNoiseLowPassActive] = useState<boolean>(() => {
+    const stored = localStorage.getItem('pointly-noise-lowpass');
+    return stored !== 'false';
+  });
+  const [audioMonitorActive, setAudioMonitorActive] = useState<boolean>(false);
+
   // Application Visual Theme
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     const stored = localStorage.getItem('pointly-theme');
@@ -171,6 +182,8 @@ export default function App() {
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const rawAudioStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const compressorNodeRef = useRef<DynamicsCompressorNode | null>(null);
+  const lowPassNodeRef = useRef<BiquadFilterNode | null>(null);
 
   // --- INITIALIZATION & RECOVERY ---
   useEffect(() => {
@@ -233,6 +246,8 @@ export default function App() {
       audioCtxRef.current.close().catch(() => {});
       audioCtxRef.current = null;
     }
+    compressorNodeRef.current = null;
+    lowPassNodeRef.current = null;
   };
 
   const applyNoiseCancellation = (rawStream: MediaStream, forceNoiseCancellation?: boolean): MediaStream => {
@@ -266,19 +281,32 @@ export default function App() {
       notch60.frequency.setValueAtTime(60, ctx.currentTime);
       notch60.Q.setValueAtTime(12, ctx.currentTime);
 
-      // Stage 3: Dynamic Noise Gate compressor
-      const compressor = ctx.createDynamicsCompressor();
-      compressor.threshold.setValueAtTime(-38, ctx.currentTime); // quiet background noise gets heavily attenuated
-      compressor.knee.setValueAtTime(10, ctx.currentTime);
-      compressor.ratio.setValueAtTime(15, ctx.currentTime);
-      compressor.attack.setValueAtTime(0.002, ctx.currentTime);
-      compressor.release.setValueAtTime(0.20, ctx.currentTime);
+      // Stage 2.5: Lowpass filter (eliminates annoying high laptop fan screech and electrical hissing over 8.5kHz)
+      const lpFilter = ctx.createBiquadFilter();
+      lpFilter.type = 'lowpass';
+      lpFilter.frequency.setValueAtTime(noiseLowPassActive ? 8500 : 20000, ctx.currentTime);
+      lowPassNodeRef.current = lpFilter;
 
-      // Chain connections: Source -> HPF -> Notch 50 -> Notch 60 -> Compressor -> Destination
+      // Stage 3: Dynamic Noise Gate compressor with manual user threshold control
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(noiseGateThreshold, ctx.currentTime); // user-adjustable threshold
+      compressor.knee.setValueAtTime(8, ctx.currentTime);
+      compressor.ratio.setValueAtTime(18, ctx.currentTime); // high compression ratio for perfect isolation below threshold
+      compressor.attack.setValueAtTime(0.003, ctx.currentTime); // ultra-fast attack
+      compressor.release.setValueAtTime(0.25, ctx.currentTime); // smooth release
+      compressorNodeRef.current = compressor;
+
+      // Chain connections: Source -> HPF -> Notch 50 -> Notch 60 -> LPFilter -> Compressor
       source.connect(hpFilter);
       hpFilter.connect(notch50);
       notch50.connect(notch60);
-      notch60.connect(compressor);
+      notch60.connect(lpFilter);
+      lpFilter.connect(compressor);
+
+      // Connect to the web audio destination if feedback audio monitor loopback is active
+      if (audioMonitorActive) {
+        compressor.connect(ctx.destination);
+      }
 
       const dest = ctx.createMediaStreamDestination();
       compressor.connect(dest);
@@ -344,6 +372,50 @@ export default function App() {
       audioCtxRef.current = null;
     }
     setMicrophoneActive(false);
+  };
+
+  const handleThresholdChange = (threshold: number) => {
+    setNoiseGateThreshold(threshold);
+    localStorage.setItem('pointly-noise-gate-threshold', threshold.toString());
+    if (compressorNodeRef.current && audioCtxRef.current) {
+      try {
+        compressorNodeRef.current.threshold.setValueAtTime(threshold, audioCtxRef.current.currentTime);
+      } catch (e) {
+        console.warn('Real-time threshold update failed:', e);
+      }
+    }
+  };
+
+  const handleLowPassToggle = (active: boolean) => {
+    setNoiseLowPassActive(active);
+    localStorage.setItem('pointly-noise-lowpass', active.toString());
+    if (lowPassNodeRef.current && audioCtxRef.current) {
+      try {
+        const freq = active ? 8500 : 20000;
+        lowPassNodeRef.current.frequency.setValueAtTime(freq, audioCtxRef.current.currentTime);
+      } catch (e) {
+        console.warn('Real-time lowpass filter update failed:', e);
+      }
+    }
+  };
+
+  const handleAudioMonitorToggle = (active: boolean) => {
+    setAudioMonitorActive(active);
+    if (compressorNodeRef.current && audioCtxRef.current) {
+      try {
+        if (active) {
+          compressorNodeRef.current.connect(audioCtxRef.current.destination);
+        } else {
+          try {
+            compressorNodeRef.current.disconnect(audioCtxRef.current.destination);
+          } catch (e) {
+            // Might not be connected to destination
+          }
+        }
+      } catch (e) {
+        console.warn('Loopback monitor connection adjustment failed:', e);
+      }
+    }
   };
 
   // --- WEBCAM CAMERA ACQUISITION ---
@@ -1275,6 +1347,12 @@ export default function App() {
             audioStream={audioStream}
             noiseCancellationActive={noiseCancellationActive}
             onNoiseCancellationToggle={handleNoiseCancellationToggle}
+            noiseGateThreshold={noiseGateThreshold}
+            onThresholdChange={handleThresholdChange}
+            noiseLowPassActive={noiseLowPassActive}
+            onLowPassToggle={handleLowPassToggle}
+            audioMonitorActive={audioMonitorActive}
+            onAudioMonitorToggle={handleAudioMonitorToggle}
             webcamFrameStyle={webcamFrameStyle}
             onWebcamFrameStyleChange={setWebcamFrameStyle}
             webcamBgEffect={webcamBgEffect}
