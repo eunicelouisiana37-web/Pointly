@@ -23,6 +23,7 @@ import { PostRecordingModal } from './components/PostRecordingModal';
 import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
 import { AlertCircle, HelpCircle as HelpIcon, Info, Laptop, Keyboard, Sun, Moon } from 'lucide-react';
 import { getAllRecordings, saveRecording, deleteRecording, updateRecordingName, initDB, DBRecording } from './lib/db';
+import { useNoiseCancellation } from './hooks/useNoiseCancellation';
 import { 
   Video, 
   Tv, 
@@ -62,18 +63,6 @@ export default function App() {
   const [selectedFps, setSelectedFps] = useState<30 | 60>(60);
   const [systemAudioActive, setSystemAudioActive] = useState(false);
   const [countdownDuration, setCountdownDuration] = useState<0 | 3 | 5 | 10>(3);
-  const [noiseCancellationActive, setNoiseCancellationActive] = useState(true);
-
-  // Advanced Noise Isolation States
-  const [noiseGateThreshold, setNoiseGateThreshold] = useState<number>(() => {
-    const stored = localStorage.getItem('pointly-noise-gate-threshold');
-    return stored ? parseFloat(stored) : -42;
-  });
-  const [noiseLowPassActive, setNoiseLowPassActive] = useState<boolean>(() => {
-    const stored = localStorage.getItem('pointly-noise-lowpass');
-    return stored !== 'false';
-  });
-  const [audioMonitorActive, setAudioMonitorActive] = useState<boolean>(false);
 
   // Application Visual Theme
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -101,6 +90,27 @@ export default function App() {
   const [webcamActive, setWebcamActive] = useState(false);
   const [selectedMicId, setSelectedMicId] = useState('');
   const [selectedCameraId, setSelectedCameraId] = useState('');
+
+  // Advanced Noise Isolation using useNoiseCancellation Hook
+  const {
+    isEnabled: noiseCancellationActive,
+    toggle: toggleNoiseCancellation,
+    applyNoiseFilter,
+    buildRecordingStream,
+    gateThreshold: noiseGateThreshold,
+    setGateThreshold: handleThresholdChange,
+    lowPassActive: noiseLowPassActive,
+    setLowPassActive: handleLowPassToggle,
+    audioMonitorActive,
+    setAudioMonitorActive: handleAudioMonitorToggle,
+  } = useNoiseCancellation({
+    highPassFrequency: 100,   // cuts fan/desk rumble below 100 Hz
+    lowPassFrequency: 8000,   // cuts harsh hiss above 8 kHz
+    enableCompressor: true,   // evens out voice volume
+    outputGain: 1.0,
+    microphoneActive,
+    selectedMicId,
+  });
   const [webcamFrame, setWebcamFrame] = useState<WebcamFrame>('circle');
   const [videoFilter, setVideoFilter] = useState<VideoFilter>('none');
   const [webcamFrameStyle, setWebcamFrameStyle] = useState<WebcamFrameStyle>('clean');
@@ -178,12 +188,10 @@ export default function App() {
 
   // Recorder instances
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const rawAudioStreamRef = useRef<MediaStream | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const compressorNodeRef = useRef<DynamicsCompressorNode | null>(null);
-  const lowPassNodeRef = useRef<BiquadFilterNode | null>(null);
 
   // --- INITIALIZATION & RECOVERY ---
   useEffect(() => {
@@ -242,80 +250,6 @@ export default function App() {
       rawAudioStreamRef.current.getTracks().forEach((t) => t.stop());
       rawAudioStreamRef.current = null;
     }
-    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
-    compressorNodeRef.current = null;
-    lowPassNodeRef.current = null;
-  };
-
-  const applyNoiseCancellation = (rawStream: MediaStream, forceNoiseCancellation?: boolean): MediaStream => {
-    const isEnabled = forceNoiseCancellation !== undefined ? forceNoiseCancellation : noiseCancellationActive;
-    if (!isEnabled) {
-      return rawStream;
-    }
-
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return rawStream;
-
-      const ctx = new AudioCtx();
-      audioCtxRef.current = ctx;
-
-      const source = ctx.createMediaStreamSource(rawStream);
-
-      // Stage 1: Highpass filter (cuts low frequencies like fan hums, background air vibration below 85Hz)
-      const hpFilter = ctx.createBiquadFilter();
-      hpFilter.type = 'highpass';
-      hpFilter.frequency.setValueAtTime(85, ctx.currentTime);
-
-      // Stage 2: Notch filter at 60Hz and 50Hz (cancels power line electricity hum)
-      const notch50 = ctx.createBiquadFilter();
-      notch50.type = 'notch';
-      notch50.frequency.setValueAtTime(50, ctx.currentTime);
-      notch50.Q.setValueAtTime(12, ctx.currentTime);
-
-      const notch60 = ctx.createBiquadFilter();
-      notch60.type = 'notch';
-      notch60.frequency.setValueAtTime(60, ctx.currentTime);
-      notch60.Q.setValueAtTime(12, ctx.currentTime);
-
-      // Stage 2.5: Lowpass filter (eliminates annoying high laptop fan screech and electrical hissing over 8.5kHz)
-      const lpFilter = ctx.createBiquadFilter();
-      lpFilter.type = 'lowpass';
-      lpFilter.frequency.setValueAtTime(noiseLowPassActive ? 8500 : 20000, ctx.currentTime);
-      lowPassNodeRef.current = lpFilter;
-
-      // Stage 3: Dynamic Noise Gate compressor with manual user threshold control
-      const compressor = ctx.createDynamicsCompressor();
-      compressor.threshold.setValueAtTime(noiseGateThreshold, ctx.currentTime); // user-adjustable threshold
-      compressor.knee.setValueAtTime(8, ctx.currentTime);
-      compressor.ratio.setValueAtTime(18, ctx.currentTime); // high compression ratio for perfect isolation below threshold
-      compressor.attack.setValueAtTime(0.003, ctx.currentTime); // ultra-fast attack
-      compressor.release.setValueAtTime(0.25, ctx.currentTime); // smooth release
-      compressorNodeRef.current = compressor;
-
-      // Chain connections: Source -> HPF -> Notch 50 -> Notch 60 -> LPFilter -> Compressor
-      source.connect(hpFilter);
-      hpFilter.connect(notch50);
-      notch50.connect(notch60);
-      notch60.connect(lpFilter);
-      lpFilter.connect(compressor);
-
-      // Connect to the web audio destination if feedback audio monitor loopback is active
-      if (audioMonitorActive) {
-        compressor.connect(ctx.destination);
-      }
-
-      const dest = ctx.createMediaStreamDestination();
-      compressor.connect(dest);
-
-      return dest.stream;
-    } catch (e) {
-      console.warn('Web Audio Studio Noise Gate could not be initialized:', e);
-      return rawStream;
-    }
   };
 
   // --- MICROPHONE ACQUISITION ---
@@ -341,8 +275,8 @@ export default function App() {
 
       rawAudioStreamRef.current = stream;
 
-      // Software active noise cancelling and static filter
-      const finalStream = applyNoiseCancellation(stream, useNoiseCancel);
+      // Software active noise cancelling using our custom hook's processor
+      const finalStream = applyNoiseFilter(stream);
 
       setAudioStream(finalStream);
       setMicrophoneActive(true);
@@ -367,55 +301,7 @@ export default function App() {
       rawAudioStreamRef.current.getTracks().forEach((t) => t.stop());
       rawAudioStreamRef.current = null;
     }
-    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
     setMicrophoneActive(false);
-  };
-
-  const handleThresholdChange = (threshold: number) => {
-    setNoiseGateThreshold(threshold);
-    localStorage.setItem('pointly-noise-gate-threshold', threshold.toString());
-    if (compressorNodeRef.current && audioCtxRef.current) {
-      try {
-        compressorNodeRef.current.threshold.setValueAtTime(threshold, audioCtxRef.current.currentTime);
-      } catch (e) {
-        console.warn('Real-time threshold update failed:', e);
-      }
-    }
-  };
-
-  const handleLowPassToggle = (active: boolean) => {
-    setNoiseLowPassActive(active);
-    localStorage.setItem('pointly-noise-lowpass', active.toString());
-    if (lowPassNodeRef.current && audioCtxRef.current) {
-      try {
-        const freq = active ? 8500 : 20000;
-        lowPassNodeRef.current.frequency.setValueAtTime(freq, audioCtxRef.current.currentTime);
-      } catch (e) {
-        console.warn('Real-time lowpass filter update failed:', e);
-      }
-    }
-  };
-
-  const handleAudioMonitorToggle = (active: boolean) => {
-    setAudioMonitorActive(active);
-    if (compressorNodeRef.current && audioCtxRef.current) {
-      try {
-        if (active) {
-          compressorNodeRef.current.connect(audioCtxRef.current.destination);
-        } else {
-          try {
-            compressorNodeRef.current.disconnect(audioCtxRef.current.destination);
-          } catch (e) {
-            // Might not be connected to destination
-          }
-        }
-      } catch (e) {
-        console.warn('Loopback monitor connection adjustment failed:', e);
-      }
-    }
   };
 
   // --- WEBCAM CAMERA ACQUISITION ---
@@ -476,7 +362,7 @@ export default function App() {
   };
 
   const handleNoiseCancellationToggle = async (active: boolean) => {
-    setNoiseCancellationActive(active);
+    toggleNoiseCancellation(active);
     if (microphoneActive) {
       await activateMicrophone(selectedMicId, active);
     }
@@ -543,28 +429,10 @@ export default function App() {
           throw new Error('Canvas recording feed is not linked or active.');
         }
 
-        const videoTrack = canvasStream.getVideoTracks()[0];
-        if (!videoTrack) {
-          throw new Error('No active video capture tracks found on presentation canvas.');
-        }
-
-        let audioTrack: MediaStreamTrack | null = null;
-        if (microphoneActive) {
-          let actStream = audioStream;
-          if (!actStream) {
-            actStream = await activateMicrophone(selectedMicId);
-          }
-          if (actStream) {
-            audioTrack = actStream.getAudioTracks()[0] || null;
-          }
-        }
-
-        const compositeTracks: MediaStreamTrack[] = [videoTrack];
-        if (audioTrack) {
-          compositeTracks.push(audioTrack);
-        }
-
-        recordedStream = new MediaStream(compositeTracks);
+        // ✅ Clean mic — fan/keyboard/HVAC filtered out
+        const { stream: combinedStream, cleanup } = await buildRecordingStream(canvasStream);
+        cleanupRef.current = cleanup;
+        recordedStream = combinedStream;
       } else {
         // Mode 2: Standard desktop browser/screen share recording with custom constraints
         const idealWidth = selectedResolution === '720p' ? 1280 : selectedResolution === '1080p' ? 1920 : 3840;
@@ -582,33 +450,16 @@ export default function App() {
         const videoTrack = displayStream.getVideoTracks()[0];
         
         // Setup listener when user stops screen share from browser banner
-        videoTrack.onended = () => {
-          stopRecording();
-        };
-
-        const compositeTracks: MediaStreamTrack[] = [videoTrack];
-
-        // Combine system audio track if captured page/tab contains audio
-        const systemAudioTracks = displayStream.getAudioTracks();
-        if (systemAudioActive && systemAudioTracks.length > 0) {
-          compositeTracks.push(systemAudioTracks[0]);
+        if (videoTrack) {
+          videoTrack.onended = () => {
+            stopRecording();
+          };
         }
 
-        // Combine microphone stream if enabled
-        if (microphoneActive) {
-          let actStream = audioStream;
-          if (!actStream) {
-            actStream = await activateMicrophone(selectedMicId);
-          }
-          if (actStream) {
-            const micTrack = actStream.getAudioTracks()[0];
-            if (micTrack) {
-              compositeTracks.push(micTrack);
-            }
-          }
-        }
-
-        recordedStream = new MediaStream(compositeTracks);
+        // ✅ Clean mic — fan/keyboard/HVAC filtered out
+        const { stream: combinedStream, cleanup } = await buildRecordingStream(displayStream);
+        cleanupRef.current = cleanup;
+        recordedStream = combinedStream;
       }
 
       // Configure MediaRecorder with popular container compatibility options
@@ -706,6 +557,8 @@ export default function App() {
         clearInterval(timerIntervalRef.current);
       }
     }
+    cleanupRef.current?.();
+    cleanupRef.current = null;
   };
 
   const handleSaveToLibrary = async (name: string, blob: Blob, duration: number) => {
